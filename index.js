@@ -1,5 +1,34 @@
 const sa = require("superagent");
 const path = require("path");
+const winston = require("winston");
+require("winston-daily-rotate-file");
+const fs = require("fs");
+
+const loggerFormat = winston.format.combine(
+  winston.format.timestamp({
+    format: "YYYY-MM-DD HH:mm:ss",
+  }),
+  winston.format.printf(
+    (info) =>
+      `${info.timestamp}  ${info.level}  ${info.message}` +
+      (info.splat !== undefined ? `${info.splat}` : " ")
+  )
+);
+
+const transportRotateFile = new winston.transports.DailyRotateFile({
+  filename: path.join(__dirname, "logs", "%DATE%.log"),
+  level: "info",
+  datePattern: "yyyy-MM-DD",
+  maxSize: "20m",
+  maxFiles: "3d",
+  prepend: true,
+});
+
+const logger = winston.createLogger({
+  level: "info",
+  format: loggerFormat,
+  transports: [transportRotateFile, new winston.transports.Console()],
+});
 
 let config;
 const configPath = path.join(__dirname, ".config.json");
@@ -7,7 +36,8 @@ const configPath = path.join(__dirname, ".config.json");
 try {
   config = require(configPath);
 } catch {
-  throw new Error(`error: no config file. you need to create '${configPath}'`);
+  logger.error(`error: no config file. you need to create '${configPath}'`);
+  process.exit(1);
 }
 
 if (
@@ -16,36 +46,40 @@ if (
   !config.domains ||
   !config.domains.length
 ) {
-  throw new Error(
+  logger.error(
     `error: invalid config file: '${configPath}'. check all fields in it`
   );
+  process.exit(1);
 }
 
 const { login, password, domains } = config;
 
 runAsync(async () => {
   const ipAddress = await getOutsideIPAddress();
-  console.log(`outside ip address: ${ipAddress}`);
+  logger.info(`outside ip address: ${ipAddress}`);
 
   for (const domain of domains) {
-    console.log(`domain: ${domain}`);
+    logger.info(`domain: ${domain}`);
 
     const currentARecord = await getDomainARecord(domain);
-    console.log(`  current A record: ${currentARecord}`);
+    logger.info(`  current A record: ${currentARecord}`);
 
     if (currentARecord != ipAddress) {
-      console.log(`  updating to new A record: '${ipAddress}'`);
+      logger.info(`  updating to new A record: '${ipAddress}'`);
       await updateDomainARecord(domain, ipAddress);
     } else {
-      console.log(`  nothing to update`);
+      logger.info(`  nothing to update`);
     }
   }
 
-  console.log("all records updated successfully");
+  logger.info("all records updated successfully");
 });
 
 function runAsync(func) {
-  func().catch((e) => console.error(e));
+  func().catch((e) => {
+    logger.error(e);
+    process.exit(1);
+  });
 }
 
 async function getOutsideIPAddress() {
